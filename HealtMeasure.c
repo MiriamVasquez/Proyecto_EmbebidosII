@@ -215,6 +215,7 @@ int main(void){
 static void Alarm_thread(void *pvParameters){
     uint16_t alarm_value;
     uint8_t set_alarm;
+    static uint16_t count_ss = 0;
     static uint16_t count_up_limit = 0;
     static uint16_t count_inferior_limit = 0;
 
@@ -224,16 +225,21 @@ static void Alarm_thread(void *pvParameters){
         	if (alarm_value < inferior_limit){
           		count_inferior_limit++;
           		count_up_limit = 0;
+          		count_ss = 0;
         	}
         	else if (alarm_value > up_limit){
         	    count_up_limit++;
            		count_inferior_limit = 0;
+           		count_ss = 0;
           	}
         	else{
         		count_inferior_limit = 0;
         		count_up_limit = 0;
-        		set_alarm = 0;
-          		xQueueSend(alarmQueue,&set_alarm,portMAX_DELAY);
+        		count_ss ++;
+        		if(count_ss > 20){
+					set_alarm = 0;
+					xQueueSend(alarmQueue,&set_alarm,portMAX_DELAY);
+        		}
         	}
 
         	if(count_up_limit > 50 ||count_inferior_limit > 50 ){
