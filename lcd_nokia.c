@@ -144,6 +144,13 @@ void LCD_nokia_init(void)
 		LCD_nokia_write_byte(LCD_CMD, 0x0C); //Set display control, normal mode. 0x0D for inverse
 }
 
+void LCD_nokia_clear(void) {
+	uint16_t index = 0;
+  for (index = 0 ; index < (LCD_X * LCD_Y / 8) ; index++)
+	  LCD_nokia_write_byte(LCD_DATA, 0x00);
+  LCD_nokia_goto_xy(0, 0); //After we clear the display, return to the home position
+}
+
 void LCD_nokia_bitmap(const uint8_t bitmap[]){
 	uint16_t index=0;
   for (index = 0 ; index < (LCD_X * LCD_Y / 8) ; index++)
@@ -185,13 +192,6 @@ void LCD_nokia_send_char(uint8_t character) {
 void LCD_nokia_send_string(uint8_t characters []) {
   while (*characters)
 	  LCD_nokia_send_char(*characters++);
-}
-
-void LCD_nokia_clear(void) {
-	uint16_t index = 0;
-  for (index = 0 ; index < (LCD_X * LCD_Y / 8) ; index++)
-	  LCD_nokia_write_byte(LCD_DATA, 0x00);
-  LCD_nokia_goto_xy(0, 0); //After we clear the display, return to the home position
 }
 
 void LCD_nokia_goto_xy(uint8_t x, uint8_t y) {

@@ -364,8 +364,6 @@ static void LCDprint_thread(void *pvParameters){
 						point_b.x = 0;
 						LCD_nokia_clear_range_FrameBuffer(0,3,252);
 					}
-					/*Draw a line between the old and new points and draw 50 points to complete the line*/
-					//drawline(point_a.x,point_a.y,point_b.x,point_b.y,50);
 				}
 			}
 			if(xQueueReceive(alarmQueue,&set_alarm, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
@@ -377,19 +375,24 @@ static void LCDprint_thread(void *pvParameters){
 				}
 			}
 		if(xQueueReceive(PointTempQueue,&ypointGraphTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
-				if(xQueuePeek(TimeScaleMailbox,&x_increment,pdMS_TO_TICKS(5))){
-					pointTemp_a = pointTemp_b;
-					pointTemp_b.y = ypointGraphTemp;
-					if(pointTemp_b.x<84){
-						pointTemp_b.x += x_increment;
-					}
-					else{
-						pointTemp_b.x = 0;
-						LCD_nokia_clear_range_FrameBuffer(0,3,252);
-					}
+			if(xQueuePeek(TimeScaleMailbox,&x_increment,pdMS_TO_TICKS(5))){
+				pointTemp_a = pointTemp_b;
+				pointTemp_b.y = ypointGraphTemp;
+				if(pointTemp_b.x<84){
+					pointTemp_b.x += x_increment;
+				}
+				else{
+					pointTemp_b.x = 0;
+					LCD_nokia_clear_range_FrameBuffer(0,3,252);
 				}
 			}
+		}
     		if (screen_selected == 1){
+        		static uint8_t initial_clean = 1;
+				if(initial_clean){
+					LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
+					initial_clean = 0;
+				}
 				drawline(point_a.x,point_a.y,point_b.x,point_b.y,50);
 				if(xQueueReceive(NumberQueue,&ypointNumber, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
 					LCD_nokia_clear_range_FrameBuffer(0,1,20);
@@ -406,6 +409,11 @@ static void LCDprint_thread(void *pvParameters){
 				}
     		}
         	if (screen_selected == 2 ){
+        		static uint8_t initial_clean = 1;
+				if(initial_clean){
+					LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
+					initial_clean = 0;
+				}
 				drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
 				if(xQueueReceive(NumberTempQueue,&ypointNumberTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
 					LCD_nokia_clear_range_FrameBuffer(0,1,20);
@@ -424,15 +432,19 @@ static void LCDprint_thread(void *pvParameters){
     		if (screen_selected == 3){
     			static uint8_t initial_clean = 1;
     			if(initial_clean){
-					LCD_nokia_clear_range_FrameBuffer(0,3,252);
-					LCD_nokia_clear_range_FrameBuffer(0,1,20);
+    				LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
 					initial_clean = 0;
     			}
-				drawline(point_a.x,(point_a.y)+15,point_b.x,(point_b.y)+15,50);
+    			if(point_b.x >= 84 || pointTemp_b.x >= 84){
+    		       	point_b.x = 0;
+    		       	pointTemp_b.x = 0;
+    		       	LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
+    			}
+
+				drawline(point_a.x,(point_a.y)+25 ,point_b.x,(point_b.y)+25 ,50);
 				drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
 
     		}
-
         }
     }
 }
