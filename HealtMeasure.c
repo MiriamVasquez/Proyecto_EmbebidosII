@@ -11,6 +11,7 @@
 #include "task.h"
 #include "queue.h"
 #include "timers.h"
+#include "semphr.h"
 
 /* Freescale includes. */
 #include "fsl_device_registers.h"
@@ -19,6 +20,7 @@
 #include "clock_config.h"
 #include "board.h"
 #include "fsl_adc16.h"
+#include "fsl_uart.h"
 
 #include "LCD_nokia.h"
 #include "buttons.h"
@@ -28,6 +30,11 @@
 #include "SPI.h"
 #include "Delay.h"
 #include "nokia_draw.h"
+
+
+#include <stdio.h>
+#include <string.h>
+
 
 /*******************************************************************************
  * Definitions
@@ -41,10 +48,21 @@
 #define HM_ADC16_USER_CHANNEL      23U
 #define HM_ADC16_IRQ_HANDLER_FUNC ADC1_IRQHandler
 
+#define ASCII_BASE 48
+
+
 typedef struct{
     uint8_t x;
     uint8_t y;
 }point_str;
+
+typedef struct{
+	uint16_t temp_up;
+	uint16_t temp_low;
+	uint16_t ECG_up;
+	uint16_t ECG_low;
+}limits_str;
+
 
 typedef struct{
     uint8_t convSource;
@@ -59,6 +77,7 @@ QueueHandle_t AdcConversionQueue;
 QueueHandle_t PointQueue;
 QueueHandle_t NumberQueue;
 QueueHandle_t alarmQueue;
+QueueHandle_t limitsQueue;
 
 /*******************************************************************************
  * Prototypes
@@ -67,6 +86,7 @@ static void LCDprint_thread(void *pvParameters);
 static void GraphProcess_thread(void *pvParameters);
 static void NumberProcess_thread(void *pvParameters);
 static void Alarm_thread(void *pvParameters);
+static void Terminal_thread(void *pvParameters);
 
 uint16_t up_limit = 200;
 uint16_t inferior_limit = 50;
@@ -148,6 +168,24 @@ void ADCConversionCallback(TimerHandle_t ARHandle){
     ADC16_SetChannelConfig(HM_HEART_ADC16_BASE, HM_ADC16_CHANNEL_GROUP, &adc16ChannelConfigStruct);
 }
 
+
+// Función para limpiar el buffer de entrada
+void clean_input_buffer(void) {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF);
+}
+
+void enable_rx(void)
+{
+	 UART_EnableInterrupts(UART0, kUART_RxDataRegFullInterruptEnable | kUART_RxOverrunInterruptEnable);
+
+	 NVIC_enable_interrupt_and_priotity(UART0_IRQ, PRIORITY_10);
+	 NVIC_global_enable_interrupts;
+
+}
+
+
+
 int main(void){
     uint8_t init_time_scale = 1;
     BOARD_InitBootPins();
@@ -166,10 +204,11 @@ int main(void){
     GPIO_callback_init(GPIO_A, time_scale);
 
     AdcConversionQueue = xQueueCreate(5,sizeof(adcConv_str));
-    PointQueue = xQueueCreate(5,sizeof(uint16_t));
+    PointQueue = xQueueCreate(5,sizeof(point_str));
     NumberQueue = xQueueCreate(5,sizeof(uint16_t));
     TimeScaleMailbox = xQueueCreate(1,sizeof(uint8_t));
     alarmQueue = xQueueCreate(1,sizeof(uint8_t));
+    limitsQueue = xQueueCreate(4,sizeof(limits_str));
 
     SendFBTimer = xTimerCreate(
             "WriteFB", /*Timer's Name*/
@@ -207,10 +246,153 @@ int main(void){
         PRINTF("Alarm_thread creation failed!.\r\n");
         while (1);
         }
+    if (xTaskCreate(Terminal_thread, "Terminal_thread", configMINIMAL_STACK_SIZE + 100, NULL, GrapNumb_PRIORITY, NULL) !=pdPASS){
+		PRINTF("terminal_thread creation failed!.\r\n");
+		while (1);
+		}
     vTaskStartScheduler();
     for (;;);
 }
 
+static void Terminal_thread(void *pvParameters) {
+    limits_str current_limits;
+    char input_char;
+    uint32_t input_value = 0;
+    uint8_t menu_state = 0; // 0:menu principal, 1:ECG alto, 2:ECG bajo, 3:Temp alta, 4:Temp baja
+    uint8_t decimal_count = 0;
+    uint8_t decimal_flag = 0;
+
+    // Valores por defecto
+    current_limits.ECG_up = 285;   // 2.85mV * 100
+    current_limits.ECG_low = 15;   // 0.15mV * 100
+    current_limits.temp_up = 375;  // 37.5°C * 10
+    current_limits.temp_low = 350; // 35.0°C * 10
+    xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+
+    // Mostrar menú inicial
+    PRINTF("\r\n=== Configuracion de Alarmas ===");
+    PRINTF("\r\n1. Limite alto ECG (%.2f mV)", current_limits.ECG_up/100.0f);
+    PRINTF("\r\n2. Limite bajo ECG (%.2f mV)", current_limits.ECG_low/100.0f);
+    PRINTF("\r\n3. Limite alto temperatura (%.1f °C)", current_limits.temp_up/10.0f);
+    PRINTF("\r\n4. Limite bajo temperatura (%.1f °C)", current_limits.temp_low/10.0f);
+    PRINTF("\r\n5. Mostrar configuracion");
+    PRINTF("\r\nSeleccione opcion (1-5): ");
+
+    for (;;) {
+        input_char = GETCHAR();
+
+        // Solo procesar caracteres válidos
+        if ((input_char >= '0' && input_char <= '9') || input_char == '.' ||
+            input_char == '\r' || input_char == '\n' || input_char == 8 || input_char == 127) {
+
+            PUTCHAR(input_char); // Echo del carácter
+
+            if (input_char == '\r' || input_char == '\n') {
+                // Procesar entrada completa
+                if (menu_state == 0) {
+                    // Menú principal
+                    if (input_value >= 1 && input_value <= 5) {
+                        switch(input_value) {
+                            case 1:
+                                PRINTF("\r\nIngrese nuevo limite alto ECG (mV): ");
+                                menu_state = 1;
+                                break;
+                            case 2:
+                                PRINTF("\r\nIngrese nuevo limite bajo ECG (mV): ");
+                                menu_state = 2;
+                                break;
+                            case 3:
+                                PRINTF("\r\nIngrese nuevo limite alto temperatura (°C): ");
+                                menu_state = 3;
+                                break;
+                            case 4:
+                                PRINTF("\r\nIngrese nuevo limite bajo temperatura (°C): ");
+                                menu_state = 4;
+                                break;
+                            case 5:
+                                // Mostrar configuración actual
+                                if (xQueueReceive(limitsQueue, &current_limits, pdMS_TO_TICKS(100))) {
+                                    PRINTF("\r\nConfiguracion actual:");
+                                    PRINTF("\r\nECG - Alto: %.2f mV, Bajo: %.2f mV",
+                                          current_limits.ECG_up/100.0f, current_limits.ECG_low/100.0f);
+                                    PRINTF("\r\nTemperatura - Alto: %.1f °C, Bajo: %.1f °C",
+                                          current_limits.temp_up/10.0f, current_limits.temp_low/10.0f);
+                                    xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+                                }
+                                break;
+                        }
+                    } else {
+                        PRINTF("\r\nOpcion no valida.");
+                    }
+                } else {
+                    // Modo de entrada de valores
+                    float float_value = (float)input_value;
+
+                    // Ajustar por decimales
+                    if (decimal_flag) {
+                        for (uint8_t i = 0; i < decimal_count; i++) {
+                            float_value /= 10.0f;
+                        }
+                    }
+
+                    switch(menu_state) {
+                        case 1:
+                            current_limits.ECG_up = (uint16_t)(float_value * 100);
+                            PRINTF("\r\nNuevo limite alto ECG: %.2f mV", float_value);
+                            break;
+                        case 2:
+                            current_limits.ECG_low = (uint16_t)(float_value * 100);
+                            PRINTF("\r\nNuevo limite bajo ECG: %.2f mV", float_value);
+                            break;
+                        case 3:
+                            current_limits.temp_up = (uint16_t)(float_value * 10);
+                            PRINTF("\r\nNuevo limite alto temperatura: %.1f °C", float_value);
+                            break;
+                        case 4:
+                            current_limits.temp_low = (uint16_t)(float_value * 10);
+                            PRINTF("\r\nNuevo limite bajo temperatura: %.1f °C", float_value);
+                            break;
+                    }
+
+                    xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+                    menu_state = 0;
+                }
+
+                // Mostrar menú principal
+                if (menu_state == 0) {
+                    PRINTF("\r\n\r\n1. Limite alto ECG (%.2f mV)", current_limits.ECG_up/100.0f);
+                    PRINTF("\r\n2. Limite bajo ECG (%.2f mV)", current_limits.ECG_low/100.0f);
+                    PRINTF("\r\n3. Limite alto temperatura (%.1f °C)", current_limits.temp_up/10.0f);
+                    PRINTF("\r\n4. Limite bajo temperatura (%.1f °C)", current_limits.temp_low/10.0f);
+                    PRINTF("\r\n5. Mostrar configuracion");
+                    PRINTF("\r\nSeleccione opcion (1-5): ");
+                }
+
+                // Resetear valores
+                input_value = 0;
+                decimal_count = 0;
+                decimal_flag = 0;
+            }
+            else if (input_char == 8 || input_char == 127) { // Backspace/Delete
+                // Implementación básica de backspace (puede mejorarse)
+                PUTCHAR(' ');
+                PUTCHAR('\b');
+                input_value /= 10;
+            }
+            else if (input_char == '.') {
+                decimal_flag = 1;
+            }
+            else if (input_char >= '0' && input_char <= '9') {
+                input_value = input_value * 10 + (input_char - '0');
+                if (decimal_flag) {
+                    decimal_count++;
+                }
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
 
 static void Alarm_thread(void *pvParameters){
     uint16_t alarm_value;
@@ -218,6 +400,9 @@ static void Alarm_thread(void *pvParameters){
     static uint16_t count_ss = 0;
     static uint16_t count_up_limit = 0;
     static uint16_t count_inferior_limit = 0;
+    limits_str current_limits;
+
+    xQueueReceive(limitsQueue, &current_limits, portMAX_DELAY);
 
     for (;;){
         /*Wait for the ADC conversion to be avaliable*/
