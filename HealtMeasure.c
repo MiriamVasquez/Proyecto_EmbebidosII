@@ -44,7 +44,7 @@
 
 #define HM_HEART_ADC16_BASE        ADC0
 #define HM_ADC16_CHANNEL_GROUP     0U
-#define HM_ADC16_USER_CHANNEL      1U
+#define HM_ADC16_USER_CHANNEL      0U
 #define HM_ADC16_IRQ_HANDLER_FUNC ADC0_IRQHandler
 
 typedef struct{
@@ -71,6 +71,7 @@ QueueHandle_t PointTempQueue;
 QueueHandle_t NumberQueue;
 QueueHandle_t NumberTempQueue;
 QueueHandle_t alarmQueue;
+QueueHandle_t alarmTempQueue;
 
 /*******************************************************************************
  * Prototypes
@@ -81,8 +82,11 @@ static void NumberProcess_thread(void *pvParameters);
 static void NumberProcessTemp_thread(void *pvParameters);
 static void Alarm_thread(void *pvParameters);
 
+
 uint16_t up_limit = 200;
 uint16_t inferior_limit = 50;
+uint16_t upTemp_limit = 350;
+uint16_t inferiorTemp_limit = 350;
 
 /*******************************************************************************
  * Code
@@ -211,8 +215,14 @@ void ADCConversionTempCallback(TimerHandle_t ARHandle){
     ADC16_SetChannelConfig(HM_HEART_ADC16_BASE,HM_ADC16_CHANNEL_GROUP , &adc16ChannelConfigStruct2);
 }
 int main(void){
+	CLOCK_EnableClock(kCLOCK_PortD);
+	CLOCK_EnableClock(kCLOCK_PortC);
+	CLOCK_EnableClock(kCLOCK_PortE);
+	CLOCK_EnableClock(kCLOCK_PortB);
+	CLOCK_EnableClock(kCLOCK_PortA);
+	CLOCK_SetSimSafeDivs();
     uint8_t init_time_scale = 1;
-    uint8_t init_screen = 1;
+    uint8_t init_screen = 2;
     BOARD_InitBootPins();
     BOARD_InitBootClocks();
     BOARD_InitDebugConsole();
@@ -223,6 +233,8 @@ int main(void){
 
     init_button(sw3);
     init_button(sw2);
+    gpio_init_as_output();
+
     NVIC_set_basepri_threshold(PRIORITY_10);
     NVIC_enable_interrupt_and_priotity(PORTA_IRQ,PRIORITY_4);
     NVIC_enable_interrupt_and_priotity(PORTD_IRQ,PRIORITY_4);
@@ -230,6 +242,7 @@ int main(void){
 
     set_button_as_interrupt(sw3);
     set_button_as_interrupt(sw2);
+
     GPIO_callback_init(GPIO_A, time_scale);
     GPIO_callback_init(GPIO_D, screen_selector);
 
@@ -242,6 +255,7 @@ int main(void){
     TimeScaleMailbox = xQueueCreate(1,sizeof(uint8_t));
     ScreenSelectorMailbox = xQueueCreate(1,sizeof(uint8_t));
     alarmQueue = xQueueCreate(1,sizeof(uint8_t));
+    alarmTempQueue = xQueueCreate(1,sizeof(uint8_t));
 
     SendFBTimer = xTimerCreate(
             "WriteFB", /*Timer's Name*/
@@ -286,6 +300,9 @@ int main(void){
         PRINTF("Alarm_thread creation failed!.\r\n");
         while (1);
     }
+    led1_off();
+    led2_off();
+
     vTaskStartScheduler();
     for (;;);
 }
@@ -296,6 +313,12 @@ static void Alarm_thread(void *pvParameters){
     static uint16_t count_ss = 0;
     static uint16_t count_up_limit = 0;
     static uint16_t count_inferior_limit = 0;
+    uint16_t alarmTemp_value;
+    uint8_t set_alarmTemp;
+    static uint16_t countTemp_ss = 0;
+    static uint16_t count_upTemp_limit = 0;
+    static uint16_t count_inferiorTemp_limit = 0;
+
     for (;;){
         /*Wait for the ADC conversion to be avaliable*/
         if(xQueueReceive(NumberQueue,&alarm_value ,pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
@@ -319,9 +342,35 @@ static void Alarm_thread(void *pvParameters){
         		}
         	}
 
-        	if(count_up_limit > 50 ||count_inferior_limit > 50 ){
+        	if(count_up_limit > 50 || count_inferior_limit > 50 ){
         		set_alarm = 1;
         		xQueueSend(alarmQueue,&set_alarm,portMAX_DELAY);
+        	}
+        }
+        if(xQueueReceive(NumberTempQueue,&alarmTemp_value ,pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
+        	if (alarmTemp_value < inferiorTemp_limit){ //este viene de la queue CAMBIAR
+          		count_inferiorTemp_limit++;
+          		count_upTemp_limit = 0;
+          		countTemp_ss = 0;
+        	}
+        	else if (alarmTemp_value > upTemp_limit){
+        		count_upTemp_limit++;
+        	    count_inferiorTemp_limit = 0;
+        	    countTemp_ss = 0;
+          	}
+        	else{
+        		count_inferiorTemp_limit = 0;
+        		count_upTemp_limit = 0;
+        		countTemp_ss ++;
+        		if(countTemp_ss > 20){
+					set_alarmTemp = 0;
+					xQueueSend(alarmTempQueue,&set_alarmTemp,portMAX_DELAY);
+        		}
+        	}
+
+        	if(count_upTemp_limit > 50 || count_inferiorTemp_limit > 50 ){
+        		set_alarmTemp = 1;
+        		xQueueSend(alarmTempQueue,&set_alarmTemp,portMAX_DELAY);
         	}
         }
     }
@@ -345,6 +394,10 @@ static void LCDprint_thread(void *pvParameters){
     uint8_t thrdigitTemp = 0;
     uint8_t screen_selected;
     static uint8_t set_alarm = 0;
+    static uint8_t set_alarmTemp = 0;
+    static uint8_t initial_clean1 = 1;
+    static uint8_t initial_clean2 = 1;
+    static uint8_t initial_clean3 = 1;
 
     for (;;){
     	if(xQueuePeek(ScreenSelectorMailbox,&screen_selected,pdMS_TO_TICKS(5))){
@@ -366,14 +419,32 @@ static void LCDprint_thread(void *pvParameters){
 					}
 				}
 			}
+
 			if(xQueueReceive(alarmQueue,&set_alarm, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
 				if (set_alarm){
-					LCD_nokia_write_string_xy_FB(1,2,"ALARM");
+					if(screen_selected==1){
+						LCD_nokia_write_string_xy_FB(1,2,"ALARM");
+					}
+					led1_on();
 				}
 				else{
 					LCD_nokia_write_string_xy_FB(1,2,"     ");
+					led1_off();
 				}
 			}
+			if(xQueueReceive(alarmTempQueue,&set_alarmTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
+				if (set_alarmTemp){
+					if(screen_selected==2){
+						LCD_nokia_write_string_xy_FB(1,2,"ALARM");
+					}
+					led2_on();
+				}
+				else{
+					LCD_nokia_write_string_xy_FB(1,2,"     ");
+					led2_off();
+				}
+			}
+
 		if(xQueueReceive(PointTempQueue,&ypointGraphTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
 			if(xQueuePeek(TimeScaleMailbox,&x_increment,pdMS_TO_TICKS(5))){
 				pointTemp_a = pointTemp_b;
@@ -388,10 +459,9 @@ static void LCDprint_thread(void *pvParameters){
 			}
 		}
     		if (screen_selected == 1){
-        		static uint8_t initial_clean = 1;
-				if(initial_clean){
+				if(initial_clean1){
 					LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-					initial_clean = 0;
+					initial_clean1 = 0;
 				}
 				drawline(point_a.x,point_a.y,point_b.x,point_b.y,50);
 				if(xQueueReceive(NumberQueue,&ypointNumber, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
@@ -407,13 +477,14 @@ static void LCDprint_thread(void *pvParameters){
 					LCD_nokia_write_string_xy_FB(25,1,"mv");
 					taskYIELD();
 				}
+				initial_clean2 = 1;
     		}
         	if (screen_selected == 2 ){
-        		static uint8_t initial_clean = 1;
-				if(initial_clean){
+				if(initial_clean2){
 					LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-					initial_clean = 0;
+					initial_clean2 = 0;
 				}
+
 				drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
 				if(xQueueReceive(NumberTempQueue,&ypointNumberTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
 					LCD_nokia_clear_range_FrameBuffer(0,1,20);
@@ -428,12 +499,12 @@ static void LCDprint_thread(void *pvParameters){
 					LCD_nokia_write_string_xy_FB(25,1,"°");
 					taskYIELD();
 				}
+				initial_clean3 = 1;
         	}
     		if (screen_selected == 3){
-    			static uint8_t initial_clean = 1;
-    			if(initial_clean){
+    			if(initial_clean3){
     				LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-					initial_clean = 0;
+					initial_clean3 = 0;
     			}
     			if(point_b.x >= 84 || pointTemp_b.x >= 84){
     		       	point_b.x = 0;
@@ -443,7 +514,7 @@ static void LCDprint_thread(void *pvParameters){
 
 				drawline(point_a.x,(point_a.y)+25 ,point_b.x,(point_b.y)+25 ,50);
 				drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
-
+				initial_clean1 = 1;
     		}
         }
     }
