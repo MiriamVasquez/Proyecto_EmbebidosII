@@ -421,10 +421,8 @@ static void LCDprint_thread(void *pvParameters){
 			}
 
 			if(xQueueReceive(alarmQueue,&set_alarm, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
-				if (set_alarm){
-					if(screen_selected==1){
-						LCD_nokia_write_string_xy_FB(1,2,"ALARM");
-					}
+				if (set_alarm && screen_selected ==1){
+					LCD_nokia_write_string_xy_FB(1,2,"ALARM");
 					led1_on();
 				}
 				else{
@@ -433,7 +431,7 @@ static void LCDprint_thread(void *pvParameters){
 				}
 			}
 			if(xQueueReceive(alarmTempQueue,&set_alarmTemp, pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
-				if (set_alarmTemp){
+				if (set_alarmTemp && screen_selected ==2){
 					if(screen_selected==2){
 						LCD_nokia_write_string_xy_FB(1,2,"ALARM");
 					}
