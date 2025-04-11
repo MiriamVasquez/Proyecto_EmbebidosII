@@ -28,6 +28,7 @@
 #include "SPI.h"
 #include "Delay.h"
 #include "nokia_draw.h"
+#include "pit.h"
 
 /*******************************************************************************
  * Definitions
@@ -90,6 +91,7 @@ static void NumberProcess_thread(void *pvParameters);
 static void NumberProcessTemp_thread(void *pvParameters);
 static void Alarm_thread(void *pvParameters);
 static void Terminal_thread(void *pvParameters);
+static uint32_t RTOS_RunTimeCounter; /* runtime counter, used for configGENERATE_RUNTIME_STATS */
 
 /*******************************************************************************
  * Code
@@ -97,6 +99,12 @@ static void Terminal_thread(void *pvParameters);
 /*!
  * @brief Application entry point.
  */
+void PIT1_IRQHandler(void){
+    PIT_ClearStatusFlags(PIT, kPIT_Chnl_1, kPIT_TimerFlag);
+    __DSB();
+    RTOS_RunTimeCounter++;
+}
+
 void ScreenInit(){
 	init_SPI();
 	LCD_nokia_init(); /*! Configuration function for the LCD */
@@ -217,6 +225,13 @@ void ADCConversionCallback(TimerHandle_t ARHandle){
 void ADCConversionTempCallback(TimerHandle_t ARHandle){
 	ADC16_SetChannelConfig(HM_HEART_ADC16_BASE,HM_ADC16_CHANNEL_GROUP , &adc16ChannelConfigStruct2);
 }
+void RTOS_AppConfigureTimerForRuntimeStats(void) {
+  RTOS_RunTimeCounter = 0;
+}
+
+uint32_t RTOS_AppGetRuntimeCounterValueFromISR(void) {
+  return RTOS_RunTimeCounter;
+}
 int main(void){
 	CLOCK_EnableClock(kCLOCK_PortD);
 	CLOCK_EnableClock(kCLOCK_PortC);
@@ -231,6 +246,7 @@ int main(void){
 	BOARD_InitDebugConsole();
 
 	ScreenInit();
+	pit_config();
 	ADCInitADC1();
 	ADCInitADC0();
 
@@ -239,12 +255,14 @@ int main(void){
 	gpio_init_as_output();
 
 	NVIC_set_basepri_threshold(PRIORITY_10);
+	NVIC_enable_interrupt_and_priotity(PIT_CH1_IRQ,PRIORITY_4);
 	NVIC_enable_interrupt_and_priotity(PORTA_IRQ,PRIORITY_4);
 	NVIC_enable_interrupt_and_priotity(PORTD_IRQ,PRIORITY_4);
 	NVIC_global_enable_interrupts;
 
 	set_button_as_interrupt(sw3);
 	set_button_as_interrupt(sw2);
+	start_pit(10000,kPIT_Chnl_1);
 
 	GPIO_callback_init(GPIO_A, time_scale);
 	GPIO_callback_init(GPIO_D, screen_selector);

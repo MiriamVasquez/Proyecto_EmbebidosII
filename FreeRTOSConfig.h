@@ -160,4 +160,9 @@ standard names. */
  * and a time stamp. */
 #define configLOGGING_INCLUDE_TIME_AND_TASK_NAME    1
 
+extern void RTOS_AppConfigureTimerForRuntimeStats(void);
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()   RTOS_AppConfigureTimerForRuntimeStats()
+extern uint32_t RTOS_AppGetRuntimeCounterValueFromISR(void);
+#define portGET_RUN_TIME_COUNTER_VALUE()           RTOS_AppGetRuntimeCounterValueFromISR()
+
 #endif /* FREERTOS_CONFIG_H */
