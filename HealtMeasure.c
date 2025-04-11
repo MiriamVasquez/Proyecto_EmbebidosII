@@ -44,7 +44,7 @@
 
 #define HM_HEART_ADC16_BASE        ADC0
 #define HM_ADC16_CHANNEL_GROUP     0U
-#define HM_ADC16_USER_CHANNEL      0U
+#define HM_ADC16_USER_CHANNEL      16U
 #define HM_ADC16_IRQ_HANDLER_FUNC ADC0_IRQHandler
 
 typedef struct{
@@ -85,8 +85,8 @@ static void Alarm_thread(void *pvParameters);
 
 uint16_t up_limit = 200;
 uint16_t inferior_limit = 50;
-uint16_t upTemp_limit = 350;
-uint16_t inferiorTemp_limit = 350;
+uint16_t upTemp_limit = 380;
+uint16_t inferiorTemp_limit = 345;
 
 /*******************************************************************************
  * Code
@@ -313,6 +313,7 @@ static void Alarm_thread(void *pvParameters){
     static uint16_t count_ss = 0;
     static uint16_t count_up_limit = 0;
     static uint16_t count_inferior_limit = 0;
+    ////////////////////////////////////////////
     uint16_t alarmTemp_value;
     uint8_t set_alarmTemp;
     static uint16_t countTemp_ss = 0;
@@ -347,6 +348,7 @@ static void Alarm_thread(void *pvParameters){
         		xQueueSend(alarmQueue,&set_alarm,portMAX_DELAY);
         	}
         }
+        ///////////////////////////////////////////////////////////////////////////////////
         if(xQueueReceive(NumberTempQueue,&alarmTemp_value ,pdMS_TO_TICKS(5)) != errQUEUE_EMPTY){
         	if (alarmTemp_value < inferiorTemp_limit){ //este viene de la queue CAMBIAR
           		count_inferiorTemp_limit++;
@@ -373,6 +375,7 @@ static void Alarm_thread(void *pvParameters){
         		xQueueSend(alarmTempQueue,&set_alarmTemp,portMAX_DELAY);
         	}
         }
+        ////////////////////////////////////////////////////////////////
     }
 }
 
