@@ -274,7 +274,12 @@ int main(void){
 			pdTRUE, /*Auto-reload mode*/
 			0, /*Timer's ID. Not used*/
 			ADCConversionCallback); /*Auto-Reload notification function. Called at expiration time*/
-	ADCConversionTempTimer = xTimerCreate("ADCConversionTemp",pdMS_TO_TICKS(100),pdTRUE,0, ADCConversionTempCallback);
+	ADCConversionTempTimer = xTimerCreate(
+			"ADCConversionTemp",
+			pdMS_TO_TICKS(100),
+			pdTRUE,
+			0,
+			ADCConversionTempCallback);
 	/*Start FrameBuffer update timer*/
 	xTimerStart(SendFBTimer,0);
 	/*Start ADC measurement timer*/
@@ -321,14 +326,17 @@ static void Alarm_thread(void *pvParameters){
 	uint16_t alarm_value;
 	uint8_t set_alarm;
 	static uint16_t count_ss = 0;
+    static uint16_t count_up_limit = 0;
+    static uint16_t count_inferior_limit = 0;
 	limits_str current_limits;
 
 
 	////////////////////////////////////////////
-	uint16_t alarmTemp_value;
-	uint8_t set_alarmTemp;
-	static uint16_t countTemp_ss = 0;
-
+    uint16_t alarmTemp_value;
+    uint8_t set_alarmTemp;
+    static uint16_t countTemp_ss = 0;
+    static uint16_t count_upTemp_limit = 0;
+    static uint16_t count_inferiorTemp_limit = 0;
 
 
 	// Obtener configuración inicial
@@ -624,10 +632,9 @@ static void Terminal_thread(void *pvParameters) {
 	PRINTF("\r\n=== Configuracion de Alarmas ===");
 	PRINTF("\r\n1. Limite alto ECG (%.2f mV)", current_limits.ECG_up/100.0f);
 	PRINTF("\r\n2. Limite bajo ECG (%.2f mV)", current_limits.ECG_low/100.0f);
-	PRINTF("\r\n3. Limite alto temperatura (%.1f °C)", current_limits.temp_up/10.0f);
-	PRINTF("\r\n4. Limite bajo temperatura (%.1f °C)", current_limits.temp_low/10.0f);
-	PRINTF("\r\n5. Mostrar configuracion");
-	PRINTF("\r\nSeleccione opcion (1-5): ");
+	PRINTF("\r\n3. Limite alto temperatura (%.1f C)", current_limits.temp_up/10.0f);
+	PRINTF("\r\n4. Limite bajo temperatura (%.1f C)", current_limits.temp_low/10.0f);
+	PRINTF("\r\nSeleccione opcion (1-4): ");
 
 	for (;;) {
 		input_char = GETCHAR();
@@ -653,23 +660,12 @@ static void Terminal_thread(void *pvParameters) {
 							menu_state = 2;
 							break;
 						case 3:
-							PRINTF("\r\nIngrese nuevo limite alto temperatura (°C): ");
+							PRINTF("\r\nIngrese nuevo limite alto temperatura (C): ");
 							menu_state = 3;
 							break;
 						case 4:
-							PRINTF("\r\nIngrese nuevo limite bajo temperatura (°C): ");
+							PRINTF("\r\nIngrese nuevo limite bajo temperatura (C): ");
 							menu_state = 4;
-							break;
-						case 5:
-							// Mostrar configuración actual
-							if (xQueueReceive(limitsQueue, &current_limits, pdMS_TO_TICKS(100))) {
-								PRINTF("\r\nConfiguracion actual:");
-								PRINTF("\r\nECG - Alto: %.2f mV, Bajo: %.2f mV",
-										current_limits.ECG_up/100.0f, current_limits.ECG_low/100.0f);
-								PRINTF("\r\nTemperatura - Alto: %.1f °C, Bajo: %.1f °C",
-										current_limits.temp_up/10.0f, current_limits.temp_low/10.0f);
-								xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
-							}
 							break;
 						}
 					} else {
@@ -697,11 +693,11 @@ static void Terminal_thread(void *pvParameters) {
 						break;
 					case 3:
 						current_limits.temp_up = (uint16_t)(float_value * 10);
-						PRINTF("\r\nNuevo limite alto temperatura: %.1f °C", float_value);
+						PRINTF("\r\nNuevo limite alto temperatura: %.1f C", float_value);
 						break;
 					case 4:
 						current_limits.temp_low = (uint16_t)(float_value * 10);
-						PRINTF("\r\nNuevo limite bajo temperatura: %.1f °C", float_value);
+						PRINTF("\r\nNuevo limite bajo temperatura: %.1f C", float_value);
 						break;
 					}
 
@@ -713,10 +709,9 @@ static void Terminal_thread(void *pvParameters) {
 				if (menu_state == 0) {
 					PRINTF("\r\n\r\n1. Limite alto ECG (%.2f mV)", current_limits.ECG_up/100.0f);
 					PRINTF("\r\n2. Limite bajo ECG (%.2f mV)", current_limits.ECG_low/100.0f);
-					PRINTF("\r\n3. Limite alto temperatura (%.1f °C)", current_limits.temp_up/10.0f);
-					PRINTF("\r\n4. Limite bajo temperatura (%.1f °C)", current_limits.temp_low/10.0f);
-					PRINTF("\r\n5. Mostrar configuracion");
-					PRINTF("\r\nSeleccione opcion (1-5): ");
+					PRINTF("\r\n3. Limite alto temperatura (%.1f C)", current_limits.temp_up/10.0f);
+					PRINTF("\r\n4. Limite bajo temperatura (%.1f C)", current_limits.temp_low/10.0f);
+					PRINTF("\r\nSeleccione opcion (1-4): ");
 				}
 
 				// Resetear valores
