@@ -55,6 +55,8 @@ typedef struct
 #define LED_GPIO (GPIOA)
 #define LED_PIN  (11U)
 
+void gpio_init_i2c(void);
+
 void gpio_init_as_output(void);
 void gpio_init_buttons(void);
 void set_gpiocISRflags(uint32_t value);

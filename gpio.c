@@ -33,6 +33,45 @@ void gpio_init_as_output(void){
     SET_PIN_AS_OUTPUT(LED2_GPIO,LED2_MASK);
 }
 
+
+void gpio_init_i2c(void){
+
+    const port_pin_config_t portb2_pinG12_config = {/* Internal pull-up resistor is enabled */
+                                                    kPORT_PullUp,
+                                                    /* Fast slew rate is configured */
+                                                    kPORT_FastSlewRate,
+                                                    /* Passive filter is disabled */
+                                                    kPORT_PassiveFilterDisable,
+                                                    /* Open drain is enabled */
+                                                    kPORT_OpenDrainEnable,
+                                                    /* Low drive strength is configured */
+                                                    kPORT_LowDriveStrength,
+                                                    /* Pin is configured as I2C0_SCL */
+                                                    kPORT_MuxAlt2,
+                                                    /* Pin Control Register fields [15:0] are not locked */
+                                                    kPORT_UnlockRegister};
+    /* PORTB2 (pin G12) is configured as I2C0_SCL */
+    PORT_SetPinConfig(PORTB, 2U, &portb2_pinG12_config);
+
+    const port_pin_config_t portb3_pinG11_config = {/* Internal pull-up resistor is enabled */
+                                                    kPORT_PullUp,
+                                                    /* Fast slew rate is configured */
+                                                    kPORT_FastSlewRate,
+                                                    /* Passive filter is disabled */
+                                                    kPORT_PassiveFilterDisable,
+                                                    /* Open drain is enabled */
+                                                    kPORT_OpenDrainEnable,
+                                                    /* Low drive strength is configured */
+                                                    kPORT_LowDriveStrength,
+                                                    /* Pin is configured as I2C0_SDA */
+                                                    kPORT_MuxAlt2,
+                                                    /* Pin Control Register fields [15:0] are not locked */
+                                                    kPORT_UnlockRegister};
+    /* PORTB3 (pin G11) is configured as I2C0_SDA */
+    PORT_SetPinConfig(PORTB, 3U, &portb3_pinG11_config);
+
+}
+
 void gpio_init_buttons(void) {
     CLOCK_EnableClock(kCLOCK_PortA); // Para SW2
     CLOCK_EnableClock(kCLOCK_PortD); // Para SW3
