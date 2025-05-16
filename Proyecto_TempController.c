@@ -61,7 +61,7 @@
 #define FTM_PWM_SOURCE_CLOCK CLOCK_GetFreq(kCLOCK_BusClk)
 #define PWM_FREQUENCY 25000 // 25 kHz para ventilador
 #define PWM_DUTY_CYCLE_MIN 20 // Mínimo duty cycle (20%)
-#define PWM_DUTY_CYCLE_MAX 100 // Máximo duty cycle (100%)
+#define PWM_DUTY_CYCLE_MAX 90 // Máximo duty cycle (100%)
 
 //sensor cmnds
 #define SHT31_ADDR 0x44
@@ -86,10 +86,7 @@ TimerHandle_t SendFBTimer;
 
 QueueHandle_t Sht31DataQueue;
 QueueHandle_t TimeScaleMailbox;
-QueueHandle_t ScreenSelectorMailbox;
 
-QueueHandle_t PointQueue;
-QueueHandle_t PointTempQueue;
 QueueHandle_t NumberQueue;
 QueueHandle_t NumberTempQueue;
 QueueHandle_t alarmQueue;
@@ -236,19 +233,6 @@ void time_scale(uint32_t flags){
 }
 
 
-void screen_selector(uint32_t flags)
-{
-	BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-	static uint8_t screen_selection = 1;
-
-	if(screen_selection < 3){
-		screen_selection++;
-	}else{
-		screen_selection = 1;
-	}
-	xQueueOverwriteFromISR(ScreenSelectorMailbox,&screen_selection,&xHigherPriorityTaskWoken);
-}
-
 void SendFBCallback(TimerHandle_t ARHandle){
 	LCD_nokia_sent_FrameBuffer();
 }
@@ -280,7 +264,6 @@ int main(void) {
 	CLOCK_EnableClock(kCLOCK_I2c0);
 	CLOCK_SetSimSafeDivs();
 	uint8_t init_time_scale = 1;
-	uint8_t init_screen = 2;
 
     /* Init board hardware. */
     BOARD_InitBootPins();
@@ -330,20 +313,16 @@ int main(void) {
 
 
 	GPIO_callback_init(GPIO_A, time_scale);
-	GPIO_callback_init(GPIO_D, screen_selector);
 
 
 	Sht31DataQueue = xQueueCreate(5, sizeof(float));
-	PointQueue = xQueueCreate(5,sizeof(uint16_t));
-	PointTempQueue = xQueueCreate(5,sizeof(uint16_t));
 	NumberQueue = xQueueCreate(5,sizeof(uint16_t));
 	NumberTempQueue = xQueueCreate(5,sizeof(uint16_t));
 	alarmQueue = xQueueCreate(1,sizeof(uint8_t));
 	alarmTempQueue = xQueueCreate(1,sizeof(uint8_t));
-	limitsQueue = xQueueCreate(4,sizeof(limits_str));
+	limitsQueue = xQueueCreate(1,sizeof(limits_str));
 
 	TimeScaleMailbox = xQueueCreate(1,sizeof(uint8_t));
-	ScreenSelectorMailbox = xQueueCreate(1,sizeof(uint8_t));
 
 	SendFBTimer = xTimerCreate(
 			"WriteFB", /*Timer's Name*/
@@ -356,7 +335,6 @@ int main(void) {
 
 	/*Publish time-scale init value*/
 	xQueueOverwrite(TimeScaleMailbox,&init_time_scale);
-	xQueueOverwrite(ScreenSelectorMailbox,&init_screen);
 
 	xLCDMutex = xSemaphoreCreateMutex();
 
@@ -370,7 +348,7 @@ int main(void) {
 		while (1);
 	}
 
-	if (xTaskCreate(Alarm_thread, "Alarm_thread", configMINIMAL_STACK_SIZE + 100, NULL, GrapNumb_PRIORITY, NULL) !=pdPASS){
+	if (xTaskCreate(Alarm_thread, "Alarm_thread", configMINIMAL_STACK_SIZE + 100, NULL, hello_task_PRIORITY, NULL) !=pdPASS){
 		PRINTF("Alarm_thread creation failed!.\r\n");
 		while (1);
 	}
@@ -398,186 +376,145 @@ int main(void) {
 	for(;;);
 }
 
-
-
-
 static void Alarm_thread(void *pvParameters) {
-    uint16_t hum_value;
-    uint16_t temp_value;
-    uint8_t set_alarm;
-    uint8_t set_alarmTemp;
-    static uint16_t count_ss = 0;
-    static uint16_t count_up_limit = 0;
-    static uint16_t count_inferior_limit = 0;
-    static uint16_t countTemp_ss = 0;
-    static uint16_t count_upTemp_limit = 0;
-    static uint16_t count_inferiorTemp_limit = 0;
+    uint16_t hum_value = 0;
+    uint16_t temp_value = 0;
+    uint8_t set_alarm = 0;
+    uint8_t set_alarmTemp = 0;
     limits_str current_limits;
 
-    // Valores por defecto
-    current_limits.Hum_up = 600;   // 60.0% humedad (*10)
-    current_limits.Hum_low = 300;  // 30.0% humedad (*10)
-    current_limits.temp_up = 400;  // 40.0°C (*10)
-    current_limits.temp_low = 200; // 20.0°C (*10)
-    xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+    // Valores por defecto (×100)
+    current_limits.Hum_up = 6000;   // 60.00%
+    current_limits.Hum_low = 3000;  // 30.00%
+    current_limits.temp_up = 4000;  // 40.00°C
+    current_limits.temp_low = 2000; // 20.00°C
+    xQueueOverwrite(limitsQueue, &current_limits);
 
     for (;;) {
-        // Verificar si hay nuevos límites
-        if (xQueueReceive(limitsQueue, &current_limits, 0) == pdPASS);
-
-        // Procesar humedad
-        if (xQueueReceive(NumberQueue, &hum_value, pdMS_TO_TICKS(5)) == pdPASS) {
-            if (hum_value < current_limits.Hum_low) {
-                count_inferior_limit++;
-                count_up_limit = 0;
-                count_ss = 0;
-            }
-            else if (hum_value > current_limits.Hum_up) {
-                count_up_limit++;
-                count_inferior_limit = 0;
-                count_ss = 0;
-            }
-            else {
-                count_inferior_limit = 0;
-                count_up_limit = 0;
-                count_ss++;
-                if (count_ss > 20) {
-                    set_alarm = 0;
-                    xQueueOverwrite(alarmQueue, &set_alarm);
-                }
-            }
-
-            if (count_up_limit > 10 || count_inferior_limit > 10) {
-                set_alarm = 1;
-                xQueueOverwrite(alarmQueue, &set_alarm);
-            }
+        // 1. Primero obtener los límites actuales (sin bloquear)
+        if (xQueueReceive(limitsQueue, &current_limits, 0) == pdPASS) {
+            PRINTF("\r\nNuevos limites recibidos: Temp[%d-%d] Hum[%d-%d]\r\n",
+                  current_limits.temp_low, current_limits.temp_up,
+                  current_limits.Hum_low, current_limits.Hum_up);
         }
 
-        // Procesar temperatura
-        if (xQueueReceive(NumberTempQueue, &temp_value, pdMS_TO_TICKS(5)) == pdPASS) {
-            if (temp_value < current_limits.temp_low) {
-                count_inferiorTemp_limit++;
-                count_upTemp_limit = 0;
-                countTemp_ss = 0;
-            }
-            else if (temp_value > current_limits.temp_up) {
-                count_upTemp_limit++;
-                count_inferiorTemp_limit = 0;
-                countTemp_ss = 0;
-            }
-            else {
-                count_inferiorTemp_limit = 0;
-                count_upTemp_limit = 0;
-                countTemp_ss++;
-                if (countTemp_ss > 20) {
-                    set_alarmTemp = 0;
-                    xQueueOverwrite(alarmTempQueue, &set_alarmTemp);
-                }
-            }
-
-            if (count_upTemp_limit > 10 || count_inferiorTemp_limit > 10) {
-                set_alarmTemp = 1;
-                xQueueOverwrite(alarmTempQueue, &set_alarmTemp);
-            }
+        // 2. Procesar humedad si hay nuevo valor
+        if (xQueueReceive(NumberQueue, &hum_value, 0) == pdPASS) {
+            set_alarm = (hum_value < current_limits.Hum_low || hum_value > current_limits.Hum_up) ? 1 : 0;
+            xQueueOverwrite(alarmQueue, &set_alarm);
+//            PRINTF("\r\nHumedad: %u.%02u%%, Alarma: %s",
+//                  hum_value/100, hum_value%100,
+//                  set_alarm ? "ACTIVA" : "inactiva");
         }
+
+        // 3. Procesar temperatura si hay nuevo valor
+        if (xQueueReceive(NumberTempQueue, &temp_value, 0) == pdPASS) {
+            set_alarmTemp = (temp_value < current_limits.temp_low || temp_value > current_limits.temp_up) ? 1 : 0;
+            xQueueOverwrite(alarmTempQueue, &set_alarmTemp);
+//            PRINTF("\r\nTemperatura: %d.%02dC, Alarma: %s",
+//                  temp_value/100, abs(temp_value)%100,
+//                  set_alarmTemp ? "ACTIVA" : "inactiva");
+        }
+
+        // 4. Pequeña pausa para no saturar la CPU
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
+
+
+
 
 static void LCDprint_thread(void *pvParameters) {
-    point_str point_a = {0};
-    point_str point_b = {0};
-    uint16_t ypointGraph;
-    uint16_t ypointNumber;
-    uint8_t x_increment;
-    uint8_t onedigit = 0;
-    uint8_t secdigit = 0;
-    uint8_t thrdigit = 0;
-    point_str pointTemp_a = {0};
-    point_str pointTemp_b = {0};
-    uint16_t ypointGraphTemp;
-    uint16_t ypointNumberTemp;
-    uint8_t onedigitTemp = 0;
-    uint8_t secdigitTemp = 0;
-    uint8_t thrdigitTemp = 0;
-    uint8_t screen_selected;
+    uint16_t hum_value;
+    uint16_t temp_value;
     static uint8_t set_alarm = 0;
     static uint8_t set_alarmTemp = 0;
-    static uint8_t initial_clean1 = 1;
-    static uint8_t initial_clean2 = 1;
-    static uint8_t initial_clean3 = 1;
-
-    uint8_t fan_speed_display = 0;
-    char fan_status_str[10] = "OFF";
+    static uint8_t initial_clean = 1;
 
     for (;;) {
-    	if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE) {
-    	            if(xQueuePeek(ScreenSelectorMailbox,&screen_selected,pdMS_TO_TICKS(5))) {
-    	                // Pantalla 1: Humedad
-    	                if (screen_selected == 1) {
-    	                    if(initial_clean1) {
-    	                        LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-    	                        LCD_nokia_write_string_xy_FB(0,0,"Humedad:");
-    	                        initial_clean1 = 0;
-    	                    }
+        if (xSemaphoreTake(xLCDMutex, portMAX_DELAY) == pdTRUE) {
+            // Limpiar solo la primera vez
+            if(initial_clean) {
+                LCD_nokia_clear();
+                LCD_nokia_write_string_xy_FB(0,0,"Hum:");
+                LCD_nokia_write_string_xy_FB(0,1,"Temp:");
+                initial_clean = 0;
+            }
 
-    	                    // Mostrar valor numérico
-    	                    if(xQueueReceive(NumberQueue,&ypointNumber, pdMS_TO_TICKS(5))) {
-    	                        LCD_nokia_clear_range_FrameBuffer(0,1,30);
-    	                        onedigit = ((ypointNumber/100)%10)+0x30; // Entero
-    	                        secdigit = ((ypointNumber/10)%10)+0x30;   // Decimal
-    	                        LCD_nokia_write_char_xy_FB(0,1,onedigit);
-    	                        LCD_nokia_write_char_xy_FB(5,1,'.');
-    	                        LCD_nokia_write_char_xy_FB(10,1,secdigit);
-    	                        LCD_nokia_write_char_xy_FB(15,1,'%');
-    	                    }
+            // Mostrar humedad
+            if(xQueueReceive(NumberQueue, &hum_value, pdMS_TO_TICKS(5))) {
+                LCD_nokia_clear_range_FrameBuffer(25,0,25); // Limpiar solo el área del valor
 
-    	                    // Mostrar gráfico
-    	                    drawline(point_a.x,point_a.y,point_b.x,point_b.y,50);
-    	                }
+                // Verificar que el valor sea razonable (0-100%)
+                if(hum_value <= 10000) { // 100.00%
+                    uint8_t entero = (hum_value/1000)%10;
+                    uint8_t decimal1 = (hum_value/100)%10;
+                    uint8_t decimal2 = (hum_value/10)%10;
 
-    	                // Pantalla 2: Temperatura
-    	                else if (screen_selected == 2) {
-    	                    if(initial_clean2) {
-    	                        LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-    	                        LCD_nokia_write_string_xy_FB(0,0,"Temperatura:");
-    	                        initial_clean2 = 0;
-    	                    }
+                    LCD_nokia_write_char_xy_FB(25,0, entero + 0x30);
+                    LCD_nokia_write_char_xy_FB(30,0, decimal1 + 0x30);
+                    LCD_nokia_write_char_xy_FB(35,0, '.');
+                    LCD_nokia_write_char_xy_FB(40,0, decimal2 + 0x30);
+                    LCD_nokia_write_char_xy_FB(45,0, '%');
+                } else {
+                    LCD_nokia_write_string_xy_FB(25,0,"ERR");
+                }
+            }
 
-    	                    // Mostrar valor numérico
-    	                    if(xQueueReceive(NumberTempQueue,&ypointNumberTemp, pdMS_TO_TICKS(5))) {
-    	                        LCD_nokia_clear_range_FrameBuffer(0,1,30);
-    	                        onedigitTemp = ((ypointNumberTemp/100)%10)+0x30; // Entero
-    	                        secdigitTemp = ((ypointNumberTemp/10)%10)+0x30;  // Decimal
-    	                        LCD_nokia_write_char_xy_FB(0,1,onedigitTemp);
-    	                        LCD_nokia_write_char_xy_FB(5,1,secdigitTemp);
-    	                        LCD_nokia_write_char_xy_FB(10,1,'.');
-    	                        LCD_nokia_write_char_xy_FB(15,1,'C');
-    	                    }
+            // Mostrar temperatura
+            if(xQueueReceive(NumberTempQueue, &temp_value, pdMS_TO_TICKS(5))) {
+                LCD_nokia_clear_range_FrameBuffer(25,1,25); // Limpiar solo el área del valor
 
-    	                    // Mostrar gráfico
-    	                    drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
-    	                }
+                // Verificar que el valor sea razonable (-40 a 125°C, rango del SHT31)
+                if(temp_value >= -4000 && temp_value <= 12500) {
+                    uint8_t signo = ' ';
+                    if(temp_value < 0) {
+                        signo = '-';
+                        temp_value = -temp_value;
+                    }
 
-    	                // Pantalla 3: Ambas mediciones
-    	                else if (screen_selected == 3) {
-    	                    if(initial_clean3) {
-    	                        LCD_nokia_clear_range_FrameBuffer(0, 0, 504);
-    	                        LCD_nokia_write_string_xy_FB(0,0,"Temp:");
-    	                        LCD_nokia_write_string_xy_FB(0,2,"Hum:");
-    	                        initial_clean3 = 0;
-    	                    }
+                    uint8_t entero = (temp_value/1000)%10;
+                    uint8_t decimal1 = (temp_value/100)%10;
+                    uint8_t decimal2 = (temp_value/10)%10;
 
-    	                    // Mostrar ambos gráficos
-    	                    drawline(point_a.x,(point_a.y)+25,point_b.x,(point_b.y)+25,50);
-    	                    drawline(pointTemp_a.x,pointTemp_a.y,pointTemp_b.x,pointTemp_b.y,50);
-    	                }
-    	            }
-    	            xSemaphoreGive(xLCDMutex);
-    	        }
-    	        vTaskDelay(pdMS_TO_TICKS(1));
+                    LCD_nokia_write_char_xy_FB(25,1, signo);
+                    LCD_nokia_write_char_xy_FB(30,1, entero + 0x30);
+                    LCD_nokia_write_char_xy_FB(35,1, decimal1 + 0x30);
+                    LCD_nokia_write_char_xy_FB(40,1, '.');
+                    LCD_nokia_write_char_xy_FB(45,1, decimal2 + 0x30);
+                    LCD_nokia_write_char_xy_FB(50,1, 'C');
+                } else {
+                    LCD_nokia_write_string_xy_FB(25,1,"ERR");
+                }
+            }
+
+            // Mostrar alarmas
+            if(xQueueReceive(alarmQueue, &set_alarm, pdMS_TO_TICKS(5))) {
+                if (set_alarm) {
+                    LCD_nokia_write_string_xy_FB(0,4,"ALARM HUMEDAD");
+                    led1_on();
+                }
+                else {
+                    LCD_nokia_write_string_xy_FB(0,4,"             ");
+                    led1_off();
+                }
+            }
+
+            if(xQueueReceive(alarmTempQueue, &set_alarmTemp, pdMS_TO_TICKS(5))) {
+                if (set_alarmTemp) {
+                    LCD_nokia_write_string_xy_FB(0,5,"ALARM TEMP");
+                    led2_on();
+                } else {
+                    LCD_nokia_write_string_xy_FB(0,5,"          ");
+                    led2_off();
+                }
+            }
+
+            xSemaphoreGive(xLCDMutex);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
-
 
 
 
@@ -590,18 +527,18 @@ static void Terminal_thread(void *pvParameters) {
     uint8_t decimal_flag = 0;
 
     // Valores por defecto actualizados para humedad y temperatura
-    current_limits.Hum_up = 600;   // 60.0% humedad (*10)
-    current_limits.Hum_low = 300;  // 30.0% humedad (*10)
-    current_limits.temp_up = 400;  // 40.0°C (*10)
-    current_limits.temp_low = 200; // 20.0°C (*10)
-    xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+    current_limits.Hum_up = 6000;   // 60.0% humedad (*10)
+    current_limits.Hum_low = 3000;  // 30.0% humedad (*10)
+    current_limits.temp_up = 4000;  // 40.0°C (*10)
+    current_limits.temp_low = 2000; // 20.0°C (*10)
+    xQueueOverwrite(limitsQueue, &current_limits);
 
     // Mostrar menú inicial con unidades correctas
     PRINTF("\r\n=== Configuracion de Alarmas ===");
-    PRINTF("\r\n1. Limite alto Humedad (%.1f %%)", current_limits.Hum_up/10.0f);
-    PRINTF("\r\n2. Limite bajo Humedad (%.1f %%)", current_limits.Hum_low/10.0f);
-    PRINTF("\r\n3. Limite alto Temperatura (%.1f C)", current_limits.temp_up/10.0f);
-    PRINTF("\r\n4. Limite bajo Temperatura (%.1f C)", current_limits.temp_low/10.0f);
+    PRINTF("\r\n1. Limite alto Humedad (%.1f %%)", current_limits.Hum_up/100.0f);
+    PRINTF("\r\n2. Limite bajo Humedad (%.1f %%)", current_limits.Hum_low/100.0f);
+    PRINTF("\r\n3. Limite alto Temperatura (%.1f C)", current_limits.temp_up/100.0f);
+    PRINTF("\r\n4. Limite bajo Temperatura (%.1f C)", current_limits.temp_low/100.0f);
     PRINTF("\r\nSeleccione opcion (1-4): ");
 
     for (;;) {
@@ -625,11 +562,11 @@ static void Terminal_thread(void *pvParameters) {
                             if (input_value >= 1 && input_value <= 5) {
                                 switch(input_value) {
                                 case 1:
-                                    PRINTF("\r\nIngrese nuevo limite alto Humedad (mV): ");
+                                    PRINTF("\r\nIngrese nuevo limite alto Humedad : ");
                                     menu_state = 1;
                                     break;
                                 case 2:
-                                    PRINTF("\r\nIngrese nuevo limite bajo Humedad (mV): ");
+                                    PRINTF("\r\nIngrese nuevo limite bajo Humedad : ");
                                     menu_state = 2;
                                     break;
                                 case 3:
@@ -657,33 +594,33 @@ static void Terminal_thread(void *pvParameters) {
 
                             switch(menu_state) {
                             case 1:
-                                current_limits.Hum_up = (uint16_t)(float_value * 100);
-                                PRINTF("\r\nNuevo limite alto Humedad: %.2f mV", float_value);
+                                current_limits.Hum_up = (uint16_t)(float_value *100);
+                                PRINTF("\r\nNuevo limite alto Humedad: %.2f", float_value);
                                 break;
                             case 2:
-                                current_limits.Hum_low = (uint16_t)(float_value * 100);
-                                PRINTF("\r\nNuevo limite bajo Humedad: %.2f mV", float_value);
+                                current_limits.Hum_low = (uint16_t)(float_value *100);
+                                PRINTF("\r\nNuevo limite bajo Humedad: %.2f", float_value);
                                 break;
                             case 3:
-                                current_limits.temp_up = (uint16_t)(float_value * 10);
+                                current_limits.temp_up = (uint16_t)(float_value *100);
                                 PRINTF("\r\nNuevo limite alto temperatura: %.1f C", float_value);
                                 break;
                             case 4:
-                                current_limits.temp_low = (uint16_t)(float_value * 10);
+                                current_limits.temp_low = (uint16_t)(float_value *100);
                                 PRINTF("\r\nNuevo limite bajo temperatura: %.1f C", float_value);
                                 break;
                             }
 
-                            xQueueSend(limitsQueue, &current_limits, portMAX_DELAY);
+                            xQueueOverwrite(limitsQueue, &current_limits);
                             menu_state = 0;
                         }
 
                         // Mostrar menú principal
                         if (menu_state == 0) {
-                            PRINTF("\r\n\r\n1. Limite alto Hum (%.2f mV)", current_limits.Hum_up/100.0f);
-                            PRINTF("\r\n2. Limite bajo Hum (%.2f mV)", current_limits.Hum_low/100.0f);
-                            PRINTF("\r\n3. Limite alto temperatura (%.1f C)", current_limits.temp_up/10.0f);
-                            PRINTF("\r\n4. Limite bajo temperatura (%.1f C)", current_limits.temp_low/10.0f);
+                            PRINTF("\r\n\r\n1. Limite alto Hum (%.2f)", current_limits.Hum_up/100.0f);
+                            PRINTF("\r\n2. Limite bajo Hum (%.2f)", current_limits.Hum_low/100.0f);
+                            PRINTF("\r\n3. Limite alto temperatura (%.1f C)", current_limits.temp_up/100.0f);
+                            PRINTF("\r\n4. Limite bajo temperatura (%.1f C)", current_limits.temp_low/100.0f);
                             PRINTF("\r\nSeleccione opcion (1-4): ");
                         }
                         xSemaphoreGive(xUartMutex);
@@ -721,26 +658,36 @@ static void PWM_Init(void)
     ftm_config_t ftmInfo;
     ftm_chnl_pwm_signal_param_t pwmParam;
 
-    // Configurar el reloj para FTM0
+    // Configurar el reloj para FTM2 (asegurarse que el reloj está habilitado)
     CLOCK_EnableClock(kCLOCK_Ftm2);
-    CLOCK_SetTpmClock(1); // Seleccionar reloj del bus
+    CLOCK_SetTpmClock(1); // Seleccionar reloj del bus (kCLOCK_BusClk)
 
     // Configuración básica del FTM
     FTM_GetDefaultConfig(&ftmInfo);
-    ftmInfo.prescale = kFTM_Prescale_Divide_16;
+
+    // Calcular el prescaler adecuado para la frecuencia deseada (25 kHz)
+    ftmInfo.prescale = FTM_CalculateCounterClkDiv(FTM_PWM_BASEADDR, PWM_FREQUENCY, FTM_PWM_SOURCE_CLOCK);
+
+    // Inicializar el módulo FTM
     FTM_Init(FTM_PWM_BASEADDR, &ftmInfo);
 
-    // Configurar el pin para PWM
-    PORT_SetPinMux(PORTB, 18, kPORT_MuxAlt3); // FTM0 CH3 en PTD4
+    // Configurar el pin para PWM (PTB18 - FTM2_CH0 en modo Alt3)
+    PORT_SetPinMux(PORTB, 18U, kPORT_MuxAlt3);
 
     // Configurar parámetros PWM
     pwmParam.chnlNumber = FTM_PWM_CHANNEL;
-    pwmParam.level = kFTM_HighTrue;
-    pwmParam.dutyCyclePercent = 0; // Iniciar apagado
-    pwmParam.firstEdgeDelayPercent = 0;
+    pwmParam.level = kFTM_HighTrue; // PWM activo en alto
+    pwmParam.dutyCyclePercent = 0;  // Iniciar con duty cycle 0% (ventilador apagado)
+    pwmParam.firstEdgeDelayPercent = 0U;
+    pwmParam.enableComplementary = false;
+    pwmParam.enableDeadtime = false;
 
-    // Configurar PWM
-    FTM_SetupPwm(FTM_PWM_BASEADDR, &pwmParam, 1, kFTM_EdgeAlignedPwm, PWM_FREQUENCY, FTM_PWM_SOURCE_CLOCK);
+    // Configurar PWM con alineación al borde (más simple para control de ventilador)
+    if (FTM_SetupPwm(FTM_PWM_BASEADDR, &pwmParam, 1U, kFTM_EdgeAlignedPwm, PWM_FREQUENCY, FTM_PWM_SOURCE_CLOCK) != kStatus_Success)
+    {
+        PRINTF("Error al configurar PWM\r\n");
+        while(1); // Bloquear si hay error
+    }
 
     // Iniciar el timer
     FTM_StartTimer(FTM_PWM_BASEADDR, kFTM_SystemClock);
@@ -749,11 +696,30 @@ static void PWM_Init(void)
 static void PWM_SetDutyCycle(uint8_t dutyCycle)
 {
     // Limitar el duty cycle entre mínimo y máximo
-    if (dutyCycle < PWM_DUTY_CYCLE_MIN) dutyCycle = 0; // Apagar si es menor al mínimo
-    else if (dutyCycle > PWM_DUTY_CYCLE_MAX) dutyCycle = PWM_DUTY_CYCLE_MAX;
+    if (dutyCycle > PWM_DUTY_CYCLE_MAX)
+    {
+        dutyCycle = PWM_DUTY_CYCLE_MAX;
+    }
+    else if (dutyCycle < PWM_DUTY_CYCLE_MIN && dutyCycle != 0)
+    {
+        dutyCycle = PWM_DUTY_CYCLE_MIN;
+    }
+
+    // Deshabilitar la salida del canal temporalmente para evitar glitches
+    FTM_UpdateChnlEdgeLevelSelect(FTM_PWM_BASEADDR, FTM_PWM_CHANNEL, 0U);
 
     // Actualizar el duty cycle
-    FTM_UpdatePwmDutycycle(FTM_PWM_BASEADDR, FTM_PWM_CHANNEL, kFTM_EdgeAlignedPwm, dutyCycle);
+    if (FTM_UpdatePwmDutycycle(FTM_PWM_BASEADDR, FTM_PWM_CHANNEL, kFTM_EdgeAlignedPwm, dutyCycle) != kStatus_Success)
+    {
+        PRINTF("Error al actualizar duty cycle\r\n");
+        return;
+    }
+
+    // Forzar actualización de registros con trigger de software
+    FTM_SetSoftwareTrigger(FTM_PWM_BASEADDR, true);
+
+    // Restaurar la salida del canal con el nuevo duty cycle
+    FTM_UpdateChnlEdgeLevelSelect(FTM_PWM_BASEADDR, FTM_PWM_CHANNEL, kFTM_HighTrue);
 }
 
 static void FanControl_task(void *pvParameters) {
@@ -762,79 +728,69 @@ static void FanControl_task(void *pvParameters) {
     uint8_t fan_state = 0;
     uint8_t fan_speed = 0;
 
-    // Valores por defecto
-    current_limits.temp_up = 400;  // 40.0°C
-    current_limits.temp_low = 200; // 20.0°C
+    // Valores por defecto (×100)
+    current_limits.temp_up = 4000;
+    current_limits.temp_low = 2000; // 20.00°C
+    xQueueOverwrite(limitsQueue, &current_limits);
 
     for (;;) {
-        // Obtener temperatura actual
+        // Obtener temperatura actual (ya viene en °C)
         if (xQueueReceive(Sht31DataQueue, &current_temp, pdMS_TO_TICKS(100))) {
-            // Se recibió nueva temperatura
+//            PRINTF("\r\nTemp actual: %.2fC, Limite: %.2fC",
+//                  current_temp, current_limits.temp_up/100.0f);
         }
 
-        // Obtener los límites actuales
+        // Obtener los límites actuales (sin bloquear)
         if (xQueueReceive(limitsQueue, &current_limits, 0)) {
-            // Se actualizaron los límites
+//            PRINTF("\r\nNuevos limites recibidos (FanCtrl): Temp[%.2f-%.2f]C",
+//                  current_limits.temp_low/100.0f, current_limits.temp_up/100.0f);
         }
 
-        // Control del ventilador
-        if (current_temp > (current_limits.temp_up / 10.0f)) {
-            // Temperatura alta - encender ventilador
+        // Control del ventilador con histéresis
+        if (current_temp > (current_limits.temp_up / 100.0f)) {
             if (!fan_state) {
                 fan_state = 1;
                 fan_speed = PWM_DUTY_CYCLE_MAX;
                 PWM_SetDutyCycle(fan_speed);
-                PRINTF("Ventilador ENCENDIDO (Temp: %.1f°C > %.1f°C)\r\n",
-                      current_temp, current_limits.temp_up / 10.0f);
+                PRINTF("\r\nVENTILADOR ACTIVADO (Temp: %.2f > Limite: %.2f)",
+                      current_temp, current_limits.temp_up/100.0f);
             }
-
-            // Control proporcional
-            float temp_diff = current_temp - (current_limits.temp_up / 10.0f);
-            float max_diff = 10.0f;
-            if (temp_diff > max_diff) temp_diff = max_diff;
-
-            fan_speed = PWM_DUTY_CYCLE_MIN +
-                       (uint8_t)((PWM_DUTY_CYCLE_MAX - PWM_DUTY_CYCLE_MIN) * (temp_diff / max_diff));
-            PWM_SetDutyCycle(fan_speed);
         }
-        else if (current_temp < (current_limits.temp_low / 10.0f)) {
-            // Temperatura baja - apagar ventilador
+        else if (current_temp < (current_limits.temp_up / 100.0f) - 2.0f) { // Histéresis de 2°C
             if (fan_state) {
                 fan_state = 0;
                 fan_speed = 0;
                 PWM_SetDutyCycle(0);
-                PRINTF("Ventilador APAGADO (Temp: %.1f°C < %.1f°C)\r\n",
-                      current_temp, current_limits.temp_low / 10.0f);
+                PRINTF("\r\nVENTILADOR DESACTIVADO (Temp: %.2f < Limite: %.2f)",
+                      current_temp, (current_limits.temp_up/100.0f) - 2.0f);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(500)); // Revisar cada 500ms
     }
 }
 
 
 static void SHT31_ReadTask(void *pvparameters) {
     float temp, hum;
-    uint16_t temp_scaled, hum_scaled;
 
     for (;;) {
         if (SHT31_ReadTempHum(I2C0, &temp, &hum)) {
-            // Escalar valores para facilitar manejo (temp*10 y hum*10 para mantener 1 decimal)
-            temp_scaled = (uint16_t)(temp * 10);
-            hum_scaled = (uint16_t)(hum * 10);
+            // Escalar valores (temp×100 y hum×100 para mantener 2 decimales)
+            int16_t temp_scaled = (int16_t)(temp * 100); // Permitir valores negativos
+            uint16_t hum_scaled = (uint16_t)(hum * 100);
 
-            // Enviar datos a las colas correspondientes
-            xQueueSend(PointTempQueue, &temp_scaled, 0);
-            xQueueSend(NumberTempQueue, &temp_scaled, 0);
-            xQueueSend(PointQueue, &hum_scaled, 0);
-            xQueueSend(NumberQueue, &hum_scaled, 0);
-
-            // También enviar a FanControl (usaremos una nueva cola)
-            xQueueSend(Sht31DataQueue, &temp, 0);
-        } else {
-            PRINTF("Error reading SHT31 sensor\r\n");
-        }
+            // Verificar rangos antes de enviar
+            if(hum_scaled <= 10000 && temp_scaled >= -4000 && temp_scaled <= 12500) {
+                xQueueSend(NumberTempQueue, &temp_scaled, 0);
+                xQueueSend(NumberQueue, &hum_scaled, 0);
+                xQueueSend(Sht31DataQueue, &temp, 0);
+            }
 
         vTaskDelay(pdMS_TO_TICKS(1000)); // Leer cada segundo
     }
 }
+}
+
+
+
