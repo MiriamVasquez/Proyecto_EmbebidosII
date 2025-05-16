@@ -41,6 +41,7 @@ void init_button(button_t button){
 }
 
 
+
 void set_button_as_interrupt(button_t button){
 	PORT_SetPinInterruptConfig(button.port, button.pin, kPORT_InterruptFallingEdge);
     NVIC_EnableIRQ(button.port == PORTA ? PORTA_IRQn : PORTD_IRQn);

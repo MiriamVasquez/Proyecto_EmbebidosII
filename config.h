@@ -17,6 +17,9 @@
 #define LED1_GPIO			(GPIOB)
 #define LED2_GPIO			(GPIOB)
 
+#define PINH_GPIO			(GPIOC)
+#define PINL_GPIO			(GPIOC)
+
 
 //PORTS
 #define RED_LED_PORT			(PORTC)
@@ -24,7 +27,8 @@
 #define GREEN_LED_PORT			(PORTE)
 #define LED1_PORT			(PORTB)
 #define LED2_PORT			(PORTB)
-
+#define PINH_PORT			(PORTC)
+#define PINL_PORT			(PORTC)
 
 //PIN
 #define RED_LED_PIN				(9u)
@@ -33,13 +37,15 @@
 #define LED1_PIN			(10u)
 #define LED2_PIN			(11u)
 
-
 // MASKS
 #define RED_LED_MASK			(1 << RED_LED_PIN)
 #define BLUE_LED_MASK			(1 << BLUE_LED_PIN)
 #define GREEN_LED_MASK			(1 << GREEN_LED_PIN)
 #define LED1_MASK			(1 << LED1_PIN)
 #define LED2_MASK			(1 << LED2_PIN)
+
+#define PINH_MASK			(1 << PINH_PIN)
+#define PINL_MASK			(1 << PINL_PIN)
 #define GPIO_MUX_MASK			(1 << 8)
 
 

@@ -61,7 +61,7 @@
 #define FTM_PWM_SOURCE_CLOCK CLOCK_GetFreq(kCLOCK_BusClk)
 #define PWM_FREQUENCY 25000 // 25 kHz para ventilador
 #define PWM_DUTY_CYCLE_MIN 20 // Mínimo duty cycle (20%)
-#define PWM_DUTY_CYCLE_MAX 90 // Máximo duty cycle (100%)
+#define PWM_DUTY_CYCLE_MAX 100 // Máximo duty cycle (100%)
 
 //sensor cmnds
 #define SHT31_ADDR 0x44
@@ -282,9 +282,24 @@ int main(void) {
     ScreenInit();
     PWM_Init();
 
-    init_button(sw3);
-    init_button(sw2);
     gpio_init_as_output();
+
+    PORT_SetPinMux(PORTC, 4U, kPORT_MuxAsGpio);
+    PORT_SetPinMux(PORTC, 3U, kPORT_MuxAsGpio);
+    gpio_pin_config_t gpioC3_config = {
+        kGPIO_DigitalOutput,
+        0
+    };
+
+    gpio_pin_config_t gpioC4_config = {
+        kGPIO_DigitalOutput,
+        0
+    };
+
+    // Inicializar los pines como salidas
+    GPIO_PinInit(GPIOC, 3U, &gpioC3_config);
+    GPIO_PinInit(GPIOC, 4U, &gpioC4_config);
+
     gpio_init_i2c();
 
     NVIC_set_basepri_threshold(PRIORITY_10);
@@ -392,14 +407,14 @@ static void Alarm_thread(void *pvParameters) {
 
     for (;;) {
         // 1. Primero obtener los límites actuales (sin bloquear)
-        if (xQueueReceive(limitsQueue, &current_limits, 0) == pdPASS) {
-            PRINTF("\r\nNuevos limites recibidos: Temp[%d-%d] Hum[%d-%d]\r\n",
-                  current_limits.temp_low, current_limits.temp_up,
-                  current_limits.Hum_low, current_limits.Hum_up);
+        if (xQueueReceive(limitsQueue, &current_limits, portMAX_DELAY) == pdPASS) {
+//            PRINTF("\r\nNuevos limites recibidos: Temp[%d-%d] Hum[%d-%d]\r\n",
+//                  current_limits.temp_low, current_limits.temp_up,
+//                  current_limits.Hum_low, current_limits.Hum_up);
         }
 
         // 2. Procesar humedad si hay nuevo valor
-        if (xQueueReceive(NumberQueue, &hum_value, 0) == pdPASS) {
+        if (xQueueReceive(NumberQueue, &hum_value, portMAX_DELAY) == pdPASS) {
             set_alarm = (hum_value < current_limits.Hum_low || hum_value > current_limits.Hum_up) ? 1 : 0;
             xQueueOverwrite(alarmQueue, &set_alarm);
 //            PRINTF("\r\nHumedad: %u.%02u%%, Alarma: %s",
@@ -504,15 +519,22 @@ static void LCDprint_thread(void *pvParameters) {
                 if (set_alarmTemp) {
                     LCD_nokia_write_string_xy_FB(0,5,"ALARM TEMP");
                     led2_on();
+                    GPIO_PinWrite(GPIOC, 3U, 1);
+					GPIO_PinWrite(GPIOC, 4U, 0);
+					PWM_SetDutyCycle(PWM_DUTY_CYCLE_MAX);
                 } else {
                     LCD_nokia_write_string_xy_FB(0,5,"          ");
                     led2_off();
+                    GPIO_PinWrite(GPIOC, 3U, 0);
+					GPIO_PinWrite(GPIOC, 4U, 0);
+					PWM_SetDutyCycle(PWM_DUTY_CYCLE_MAX);
+
                 }
             }
 
             xSemaphoreGive(xLCDMutex);
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(41));
     }
 }
 
@@ -674,6 +696,7 @@ static void PWM_Init(void)
     // Configurar el pin para PWM (PTB18 - FTM2_CH0 en modo Alt3)
     PORT_SetPinMux(PORTB, 18U, kPORT_MuxAlt3);
 
+
     // Configurar parámetros PWM
     pwmParam.chnlNumber = FTM_PWM_CHANNEL;
     pwmParam.level = kFTM_HighTrue; // PWM activo en alto
@@ -726,47 +749,44 @@ static void FanControl_task(void *pvParameters) {
     float current_temp = 0.0f;
     limits_str current_limits;
     uint8_t fan_state = 0;
-    uint8_t fan_speed = 0;
 
-    // Valores por defecto (×100)
-    current_limits.temp_up = 4000;
+    // 1. Inicializar con valores por defecto
+    current_limits.temp_up = 4000;  // 40.00°C
     current_limits.temp_low = 2000; // 20.00°C
-    xQueueOverwrite(limitsQueue, &current_limits);
+
+    // 2. Esperar el primer valor de límites (bloqueante)
+    if (xQueueReceive(limitsQueue, &current_limits, portMAX_DELAY) == pdPASS) {
+//        PRINTF("\r\n[FanCtrl] Valores iniciales recibidos: %.2fC", current_limits.temp_up/100.0f);
+    }
 
     for (;;) {
-        // Obtener temperatura actual (ya viene en °C)
-        if (xQueueReceive(Sht31DataQueue, &current_temp, pdMS_TO_TICKS(100))) {
-//            PRINTF("\r\nTemp actual: %.2fC, Limite: %.2fC",
-//                  current_temp, current_limits.temp_up/100.0f);
+        // 3. Verificar nuevos límites SIN BLOQUEAR
+        if (xQueueReceive(limitsQueue, &current_limits, 0) == pdPASS) {
+//            PRINTF("\r\n[FanCtrl] Nuevo límite: %.2fC", current_limits.temp_up/100.0f);
         }
 
-        // Obtener los límites actuales (sin bloquear)
-        if (xQueueReceive(limitsQueue, &current_limits, 0)) {
-//            PRINTF("\r\nNuevos limites recibidos (FanCtrl): Temp[%.2f-%.2f]C",
-//                  current_limits.temp_low/100.0f, current_limits.temp_up/100.0f);
-        }
+        // 4. Obtener temperatura actual
+        if (xQueueReceive(Sht31DataQueue, &current_temp, 0) == pdPASS) {
+            float temp_limit = current_limits.temp_up / 100.0f;
 
-        // Control del ventilador con histéresis
-        if (current_temp > (current_limits.temp_up / 100.0f)) {
-            if (!fan_state) {
+            // 5. Control del ventilador
+            if (current_temp > temp_limit && !fan_state) {
                 fan_state = 1;
-                fan_speed = PWM_DUTY_CYCLE_MAX;
-                PWM_SetDutyCycle(fan_speed);
-                PRINTF("\r\nVENTILADOR ACTIVADO (Temp: %.2f > Limite: %.2f)",
-                      current_temp, current_limits.temp_up/100.0f);
+                GPIO_PinWrite(GPIOC, 3U, 1);
+                GPIO_PinWrite(GPIOC, 4U, 0);
+                PWM_SetDutyCycle(PWM_DUTY_CYCLE_MAX);
+                PRINTF("\r\n[FanCtrl] ACTIVADO");
             }
-        }
-        else if (current_temp < (current_limits.temp_up / 100.0f) - 2.0f) { // Histéresis de 2°C
-            if (fan_state) {
+            if(current_temp < (temp_limit - 2.0f) && fan_state) {
                 fan_state = 0;
-                fan_speed = 0;
+                GPIO_PinWrite(GPIOC, 3U, 0);
+                GPIO_PinWrite(GPIOC, 4U, 0);
                 PWM_SetDutyCycle(0);
-                PRINTF("\r\nVENTILADOR DESACTIVADO (Temp: %.2f < Limite: %.2f)",
-                      current_temp, (current_limits.temp_up/100.0f) - 2.0f);
+                PRINTF("\r\n[FanCtrl] DESACTIVADO");
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(500)); // Revisar cada 500ms
+        vTaskDelay(pdMS_TO_TICKS(65)); //
     }
 }
 
