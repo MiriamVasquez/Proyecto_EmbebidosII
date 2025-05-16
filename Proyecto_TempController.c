@@ -367,15 +367,14 @@ int main(void) {
 		PRINTF("Alarm_thread creation failed!.\r\n");
 		while (1);
 	}
+	if (xTaskCreate(FanControl_task, "FanCtrl", configMINIMAL_STACK_SIZE + 100, NULL, hello_task_PRIORITY, NULL) != pdPASS) {
+		    PRINTF("FanControl_task creation failed!.\r\n");
+		    while (1);
+		}
 
 	if (xTaskCreate(Terminal_thread, "Terminal_thread", configMINIMAL_STACK_SIZE + 100, NULL, GrapNumb_PRIORITY, NULL) !=pdPASS){
 		PRINTF("terminal_thread creation failed!.\r\n");
 		while (1);
-	}
-
-	if (xTaskCreate(FanControl_task, "FanCtrl", configMINIMAL_STACK_SIZE + 100, NULL, GrapNumb_PRIORITY, NULL) != pdPASS) {
-	    PRINTF("FanControl_task creation failed!.\r\n");
-	    while (1);
 	}
 
     if (xTaskCreate(SHT31_ReadTask, "SHT31_Read", configMINIMAL_STACK_SIZE + 200, NULL, GrapNumb_PRIORITY, NULL) != pdPASS) {
@@ -519,15 +518,11 @@ static void LCDprint_thread(void *pvParameters) {
                 if (set_alarmTemp) {
                     LCD_nokia_write_string_xy_FB(0,5,"ALARM TEMP");
                     led2_on();
-                    GPIO_PinWrite(GPIOC, 3U, 1);
-					GPIO_PinWrite(GPIOC, 4U, 0);
-					PWM_SetDutyCycle(PWM_DUTY_CYCLE_MAX);
+
                 } else {
                     LCD_nokia_write_string_xy_FB(0,5,"          ");
                     led2_off();
-                    GPIO_PinWrite(GPIOC, 3U, 0);
-					GPIO_PinWrite(GPIOC, 4U, 0);
-					PWM_SetDutyCycle(PWM_DUTY_CYCLE_MAX);
+
 
                 }
             }
@@ -754,19 +749,15 @@ static void FanControl_task(void *pvParameters) {
     current_limits.temp_up = 4000;  // 40.00°C
     current_limits.temp_low = 2000; // 20.00°C
 
-    // 2. Esperar el primer valor de límites (bloqueante)
-    if (xQueueReceive(limitsQueue, &current_limits, portMAX_DELAY) == pdPASS) {
-//        PRINTF("\r\n[FanCtrl] Valores iniciales recibidos: %.2fC", current_limits.temp_up/100.0f);
-    }
 
     for (;;) {
         // 3. Verificar nuevos límites SIN BLOQUEAR
-        if (xQueueReceive(limitsQueue, &current_limits, 0) == pdPASS) {
+    	if (xQueueReceive(limitsQueue, &current_limits, portMAX_DELAY) == pdPASS) {
 //            PRINTF("\r\n[FanCtrl] Nuevo límite: %.2fC", current_limits.temp_up/100.0f);
         }
 
         // 4. Obtener temperatura actual
-        if (xQueueReceive(Sht31DataQueue, &current_temp, 0) == pdPASS) {
+        if (xQueueReceive(Sht31DataQueue, &current_temp, portMAX_DELAY) == pdPASS) {
             float temp_limit = current_limits.temp_up / 100.0f;
 
             // 5. Control del ventilador
@@ -786,7 +777,7 @@ static void FanControl_task(void *pvParameters) {
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(65)); //
+        vTaskDelay(pdMS_TO_TICKS(50)); //
     }
 }
 
